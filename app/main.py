@@ -3,14 +3,31 @@ VisionAgent API — Ana FastAPI uygulaması.
 Görsel analiz + RAG ile zenginleştirilmiş yanıt dönen AI servisi.
 """
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 import uvicorn
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Uygulama başlarken/kapanırken çalışan lifecycle hook."""
+    print("[API] VisionAgent başlatılıyor...")
+    # Model yüklemesini ilk istek yerine burada da tetikleyebiliriz
+    # Ancak başlangıç süresini uzatır, bu yüzden lazy loading tercih ediyoruz
+    yield
+    print("[API] VisionAgent kapatılıyor...")
+
 
 app = FastAPI(
     title="VisionAgent API",
-    description="AI agent that analyzes images and answers questions using RAG",
+    description=(
+        "Qwen2-VL görsel dil modeli ve Qdrant RAG ile güçlendirilmiş "
+        "yapay zeka ajanı. Görselleri analiz eder, geçmiş analizlerden "
+        "bağlam çeker ve zenginleştirilmiş yanıtlar üretir."
+    ),
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS — tüm originlere izin ver (geliştirme ortamı)
@@ -25,17 +42,21 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     """Servisin çalışıp çalışmadığını kontrol eder."""
-    return {"status": "ok"}
+    return {"status": "ok", "service": "VisionAgent"}
 
 
 @app.post("/analyze")
-async def analyze_image(
-    file: UploadFile = File(...),
-    question: str = "What do you see in this image?",
+async def analyze_image_endpoint(
+    file: UploadFile = File(..., description="Analiz edilecek görsel dosyası"),
+    question: str = Query(
+        default="What do you see in this image?",
+        description="Görsel hakkında sorulacak soru",
+    ),
 ):
     """
-    Görsel + soru alır, VLM + RAG ile analiz eder.
-    Henüz agent modülü tamamlanmadığı için şimdilik placeholder.
+    Görsel + soru alır → Qwen2-VL ile analiz eder → Qdrant RAG ile
+    geçmiş bağlamı çeker → Zenginleştirilmiş yanıt döner.
+    Her çalışma MLflow'a loglanır.
     """
     # Dosya tipini kontrol et
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -46,17 +67,19 @@ async def analyze_image(
 
     image_bytes = await file.read()
 
-    # Agent modülü hazır olunca bu satır aktif edilecek:
-    # from app.agent import run_agent
-    # result = await run_agent(image_bytes, question)
+    if len(image_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Boş dosya yüklendi.")
 
-    return {
-        "status": "placeholder",
-        "message": "Agent modülü henüz aktif değil. Görsel alındı.",
-        "question": question,
-        "image_size_bytes": len(image_bytes),
-        "content_type": file.content_type,
-    }
+    # LangGraph agent pipeline'ını çalıştır
+    from app.agent import run_agent
+
+    result = await run_agent(image_bytes, question)
+
+    # Eğer agent hata döndüyse 500 dön
+    if result.get("error"):
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return result
 
 
 if __name__ == "__main__":

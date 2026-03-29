@@ -1,61 +1,110 @@
+"""
+VisionAgent — RAG Indexer Modülü.
+VLM çıktılarını vektöre dönüştürüp Qdrant'a kaydeder.
+Böylece geçmiş analizler "uzun süreli hafıza" olarak kullanılabilir.
+"""
+
+from typing import Optional, List, Dict
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
-from transformers import AutoTokenizer, AutoModel
-import torch
+from sentence_transformers import SentenceTransformer
 import os
 import uuid
 
+# Qdrant bağlantı ayarları (.env'den okunur)
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
-COLLECTION_NAME = "vision_agent_docs"
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+COLLECTION_NAME = "vision_agent_memory"
 
-client = None
-embed_model = None
-embed_tokenizer = None
+# Embedding modeli — hafif ve hızlı (384 boyutlu vektör üretir)
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-def get_client():
-    global client
-    if client is None:
-        client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
-    return client
+# Singleton nesneler
+_client: Optional[QdrantClient] = None
+_embed_model: Optional[SentenceTransformer] = None
 
-def get_embedding_model():
-    global embed_model, embed_tokenizer
-    if embed_model is None:
-        embed_tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL)
-        embed_model = AutoModel.from_pretrained(EMBEDDING_MODEL)
-    return embed_model, embed_tokenizer
 
-def embed_text(text: str) -> list:
-    model, tokenizer = get_embedding_model()
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-    with torch.no_grad():
-        outputs = model(**inputs)
-    embedding = outputs.last_hidden_state[:, 0, :].squeeze().tolist()
-    return embedding
+def get_client() -> QdrantClient:
+    """Qdrant client'ını singleton olarak döndürür."""
+    global _client
+    if _client is None:
+        try:
+            _client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=5)
+            # Bağlantıyı doğrula
+            _client.get_collections()
+            print(f"[RAG] Qdrant bağlantısı başarılı: {QDRANT_HOST}:{QDRANT_PORT}")
+        except Exception as e:
+            print(f"[RAG] Qdrant bağlantı hatası: {e}")
+            _client = None
+            raise ConnectionError(
+                f"Qdrant sunucusuna bağlanılamadı ({QDRANT_HOST}:{QDRANT_PORT}). "
+                "Docker compose çalışıyor mu? → docker compose up -d"
+            ) from e
+    return _client
+
+
+def get_embedding_model() -> SentenceTransformer:
+    """Embedding modelini singleton olarak yükler."""
+    global _embed_model
+    if _embed_model is None:
+        print(f"[RAG] Embedding modeli yükleniyor: {EMBEDDING_MODEL_NAME}")
+        _embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        print("[RAG] Embedding modeli hazır.")
+    return _embed_model
+
+
+def embed_text(text: str) -> List[float]:
+    """Metni vektöre dönüştürür (384 boyutlu)."""
+    model = get_embedding_model()
+    embedding = model.encode(text, show_progress_bar=False)
+    return embedding.tolist()
+
 
 def ensure_collection():
-    c = get_client()
-    existing = [col.name for col in c.get_collections().collections]
+    """Qdrant'ta koleksiyon yoksa oluşturur."""
+    client = get_client()
+    existing = [col.name for col in client.get_collections().collections]
     if COLLECTION_NAME not in existing:
-        c.create_collection(
+        client.create_collection(
             collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
         )
+        print(f"[RAG] Koleksiyon oluşturuldu: {COLLECTION_NAME}")
 
-def index_document(text: str, metadata: dict = {}):
+
+def index_document(text: str, metadata: Optional[Dict] = None) -> Dict:
+    """
+    Metni vektöre çevirip Qdrant'a kaydeder.
+    
+    Args:
+        text: Kaydedilecek metin (VLM analiz çıktısı vb.)
+        metadata: Ek bilgi (soru, zaman damgası vb.)
+    
+    Returns:
+        İndeksleme sonucu bilgisi
+    """
+    if metadata is None:
+        metadata = {}
+
     ensure_collection()
-    c = get_client()
+    client = get_client()
     vector = embed_text(text)
-    c.upsert(
+    point_id = str(uuid.uuid4())
+
+    client.upsert(
         collection_name=COLLECTION_NAME,
         points=[
             PointStruct(
-                id=str(uuid.uuid4()),
+                id=point_id,
                 vector=vector,
-                payload={"text": text, **metadata}
+                payload={"text": text, **metadata},
             )
-        ]
+        ],
     )
-    return {"status": "indexed", "text_preview": text[:100]}
+
+    print(f"[RAG] Doküman indekslendi: {text[:80]}...")
+    return {
+        "status": "indexed",
+        "id": point_id,
+        "text_preview": text[:100],
+    }
