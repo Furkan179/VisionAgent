@@ -4,10 +4,14 @@ Her VLM + RAG analizini MLflow'a loglar.
 """
 
 from typing import Optional, Dict
+from dotenv import load_dotenv
 import mlflow
 import os
 
-MLFLOW_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+# .env dosyasını yükle
+load_dotenv()
+
+MLFLOW_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5001")
 
 # MLflow bağlantısı — sunucu yoksa sessizce devam et
 _initialized = False
@@ -19,6 +23,10 @@ def _init_mlflow():
     if not _initialized:
         try:
             mlflow.set_tracking_uri(MLFLOW_URI)
+            # Experiment yoksa oluştur, varsa ID'sini al
+            experiment = mlflow.get_experiment_by_name("VisionAgent")
+            if experiment is None:
+                mlflow.create_experiment("VisionAgent")
             mlflow.set_experiment("VisionAgent")
             _initialized = True
             print(f"[MLflow] Bağlantı kuruldu: {MLFLOW_URI}")
@@ -59,8 +67,8 @@ def log_run(question: str, answer: str, duration: float, extra_metrics: Optional
                 for key, value in extra_metrics.items():
                     mlflow.log_metric(key, value)
 
-            # Tam yanıtı artifact olarak kaydet
-            mlflow.log_text(answer, "answer.txt")
+            # Tam yanıtı parametre olarak kaydet (artifact yerine)
+            mlflow.log_param("full_answer", answer[:500])
 
         print(f"[MLflow] Run loglandı — süre: {duration}s, cevap uzunluğu: {len(answer)}")
     except Exception as e:

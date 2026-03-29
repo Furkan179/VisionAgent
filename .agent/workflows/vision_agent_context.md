@@ -20,11 +20,16 @@ Bu dosya sistem ajanlarının projeyi bir defada "tek nefeste" anlayabilmesi, te
 ## ✅ Başarılanlar (Geçmiş Adımlar)
 1. **Ortam ve Altyapı:** `requirements.txt` güncellendi, versiyon çakışmaları (`pydantic, torchvision, accelerate`) giderildi. FastAPI `/health` endpoint'i başarılı.
 2. **VLM Modülü (`app/vision.py`):** Qwen2-VL entegrasyonu tamamlandı. Bellek optimizasyonları ve `qwen_vl_utils` işleme metotları ile test resmi üzerinde başarılı mps inference'ı yapıldı (`test_vision.py`).
+3. **RAG Sistemi (`app/rag/`):** `indexer.py` (sentence-transformers ile embedding + Qdrant upsert) ve `retriever.py` (semantik arama) tamamlandı. Savunmacı hata yakalama ile Qdrant down olsa bile uygulama çökmez.
+4. **LangGraph Agent (`app/agent.py`):** Gerçek StateGraph ile 3 düğümlü pipeline (analyze → retrieve → synthesize). Singleton compiled graph.
+5. **MLflow Tracking (`app/tracking.py`):** Lazy init, graceful degradation. Her analiz run'ını loglar.
+6. **main.py Entegrasyonu:** Tüm modüller birleştirildi, `/analyze` endpoint'i gerçek LangGraph pipeline'ına bağlı.
+7. **GitHub Push:** Proje `furkan179/VisionAgent` reposuna pushlandı.
 
 ## 🚀 Sonraki Görevler (Sıradaki Bekleyenler)
-1. **RAG Entegrasyonu (`app/rag/indexer.py` & `retriever.py`):** Docker ile qdrant sunucusunun ayağa kalktığından emin olup, VLM çıktılarını + orijinal soruyu kaydedip getirebilecek basit bir RAG sistemi kurgulanacak.
-2. **LangGraph Agent (`app/agent.py`):** VLM sonucunu alıp Qdrant ile karşılaştıran ve nihai akıllı yanıtı üreten agent akışı yazılacak.
-3. **MLFlow (`mlflow/tracking.py`):** İsteklerin Qwen + RAG sonucundaki response time ve veri logları MLFlow serverı üzerinden (Docker port 5000) track edilecek.
+1. **Docker Kurulumu:** Mac'e Docker Desktop kurulacak, `docker compose up -d` ile Qdrant + MLflow servisleri ayaklandırılacak.
+2. **Uçtan Uca Test:** Docker servisleri çalışırken `/analyze` endpoint'ine görsel gönderip tüm pipeline'ı (VLM → RAG → MLflow) test etmek.
+3. **README.md:** Proje dokümantasyonu ve kurulum rehberi yazmak.
 
 ## 💡 Kurallar
 - (Kullanıcının Global Kuralları): Türkçe iletişim, DRY, Defensive Coding (hata yakalama `try/except`), güncel ve asenkron modern syntax.
